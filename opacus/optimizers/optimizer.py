@@ -43,6 +43,9 @@ class DPOptimizer(Optimizer):
         self.expected_batch_size = expected_batch_size
         self.step_hook = None
 
+        self.param_groups = optimizer.param_groups
+        self.state = optimizer.state
+
         self.accumulated_iterations = 0
 
     @property
@@ -107,7 +110,7 @@ class DPOptimizer(Optimizer):
 
         self.optimizer.zero_grad(set_to_none)
 
-    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+    def pre_step(self):
         self.accumulated_iterations += 1
 
         self.clip_and_accumulate()
@@ -118,6 +121,10 @@ class DPOptimizer(Optimizer):
             self.step_hook(self)
 
         self.accumulated_iterations = 0
+
+    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
+        self.pre_step()
+        
         return self.optimizer.step(closure)
 
     # TODO: potentially refactor to decouple memory wins from accounting/averaging
