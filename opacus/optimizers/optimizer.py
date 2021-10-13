@@ -72,7 +72,7 @@ class DPOptimizer(Optimizer):
 
     def clip_and_accumulate(self):
         per_param_norms = [
-            x.view(len(x), -1).norm(2, dim=-1) for x in self.grad_samples
+            g.view(len(g), -1).norm(2, dim=-1) for g in self.grad_samples
         ]
         per_sample_norms = torch.stack(per_param_norms, dim=1).norm(2, dim=1)
         per_sample_clip_factor = (self.max_grad_norm / (per_sample_norms + 1e-6)).clamp(
