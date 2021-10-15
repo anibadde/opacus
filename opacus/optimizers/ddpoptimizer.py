@@ -28,15 +28,18 @@ class DPDDPOptimizer(DPOptimizer):
         # Noise only gets added to the first worker
         if self.rank == 0:
             super().add_noise()
+        else:
+            for p in self.params:
+                p.grad = p.summed_grad
 
 
     def reduce_gradients(self):
-        for param in self.params:
-            if not param.requires_grad:
+        for p in self.params:
+            if not p.requires_grad:
                 continue
-            torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.SUM)
             if self.loss_reduction == "mean":
-                param.grad /= self.world_size
+                p.grad /= self.world_size
 
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
         self.pre_step()

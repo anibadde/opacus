@@ -5,7 +5,7 @@ from typing import Optional, List
 from torch.utils.data import DataLoader
 from opacus.accountants import RDPAccountant
 from opacus.grad_sample.grad_sample_module import GradSampleModule
-from opacus.optimizers import DPOptimizer, DPDDPOptimizer
+from opacus.optimizers import DPOptimizer, DPDDPOptimizer, DPPerLayerOptimizer, DPDDPPerLayerOptimizer
 from opacus.accountants.rdp import get_noise_multiplier
 from opacus.distributed import (  
     DifferentiallyPrivateDistributedDataParallel     
@@ -14,6 +14,7 @@ from opacus.distributed import (
 from opacus.data_loader import DPDataLoader
 from torch import nn, optim
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 class PrivacyEngine:
@@ -32,6 +33,7 @@ class PrivacyEngine:
         loss_reduction: str = "mean",
     ):
         distributed = type(module) is DPDDP
+        assert type(module) is not DDP
 
         # TODO: DP-Specific validation
         # TODO: either validate consistent dataset or do per-dataset accounting
@@ -49,6 +51,51 @@ class PrivacyEngine:
             loss_reduction=loss_reduction,
             distributed=distributed,
         )
+
+        def accountant_hook(optim: DPOptimizer):
+            # TODO: This works for Poisson for both single-node and distributed
+            # The reason is that the sample rate is the same in both cases (but in distributed mode, each node samples among a subset of the data)
+            self.accountant.step(
+                noise_multiplier=optim.noise_multiplier,
+                sample_rate=sample_rate * optim.accumulated_iterations,
+            )
+
+        optimizer.attach_step_hook(accountant_hook)
+
+        return module, optimizer, data_loader
+
+    def make_private_per_layer(
+        self,
+        module: nn.Module,
+        optimizer: optim.Optimizer,
+        data_loader: DataLoader,
+        noise_multiplier: float,
+        max_grad_norms: float,
+        batch_first: bool = True,
+        loss_reduction: str = "mean",
+    ):
+        distributed = type(module) is DDP
+        assert type(module) is not DPDDP
+
+        # TODO: DP-Specific validation
+        # TODO: either validate consistent dataset or do per-dataset accounting
+        module = self._prepare_model(module, batch_first, loss_reduction)
+        data_loader = self._prepare_data_loader(data_loader, distributed=distributed)
+
+        sample_rate = 1 / len(data_loader)
+        expected_batch_size = int(len(data_loader.dataset) * sample_rate)
+
+        optimizer = self._prepare_optimizer_per_layer(
+            optimizer=optimizer,
+            noise_multiplier=noise_multiplier,
+            max_grad_norms=max_grad_norms,
+            expected_batch_size=expected_batch_size,
+            loss_reduction=loss_reduction,
+            distributed=distributed,
+        )
+
+        if distributed:
+            optimizer.register_hooks(module)
 
         def accountant_hook(optim: DPOptimizer):
             # TODO: This works for Poisson for both single-node and distributed
@@ -139,6 +186,27 @@ class PrivacyEngine:
                 expected_batch_size=expected_batch_size,
                 loss_reduction=loss_reduction,
             )
+
+    def _prepare_optimizer_per_layer(
+        self,
+        optimizer: optim.Optimizer,
+        noise_multiplier: float,
+        max_grad_norms: float,
+        expected_batch_size: int,
+        loss_reduction: str = "mean",
+        distributed : bool = False,
+    ) -> DPOptimizer:
+        if isinstance(optimizer, DPOptimizer):
+            # TODO: lol rename optimizer optimizer optimizer
+            optimizer = optimizer.optimizer
+
+        return (DPDDPPerLayerOptimizer if distributed else DPPerLayerOptimizer)(
+            optimizer=optimizer,
+            noise_multiplier=noise_multiplier,
+            max_grad_norms=max_grad_norms,
+            expected_batch_size=expected_batch_size,
+            loss_reduction=loss_reduction,
+        )
 
     def _prepare_data_loader(self, data_loader: DataLoader, distributed: bool) -> DataLoader:
         return DPDataLoader.from_data_loader(data_loader, distributed=distributed)

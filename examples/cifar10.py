@@ -221,11 +221,6 @@ def main():
         rank = 0
         world_size = 1
 
-    if args.dist_algo == "ddp_hook" and not args.clip_per_layer:
-        raise ValueError(
-            "Please enable `--clip_per_layer` if you want to use Opacus DDP"
-        )
-
     # The following few lines, enable stats gathering about the run
     # 1. where the stats should be logged
     stats.set_global_summary_writer(tensorboard.SummaryWriter(args.log_dir))
@@ -309,14 +304,10 @@ def main():
     # Use the right distributed module wrapper if distributed training is enabled
     if world_size > 1:
         if not args.disable_dp:
-            if args.dist_algo == "naive":
-                model = DPDDP(model)
-            elif args.dist_algo == "ddp_hook":
+            if args.clip_per_layer:
                 model = DDP(model, device_ids=[device])
             else:
-                raise NotImplementedError(
-                    f"Unrecognized argument for the distributed algorithm: {args.dist_algo}"
-                )
+                model = DPDDP(model)
         else:
             model = DDP(model, device_ids=[device])
 
@@ -350,13 +341,25 @@ def main():
         privacy_engine = PrivacyEngine(
             secure_mode=args.secure_rng,
         )
-        model, optimizer, train_loader = privacy_engine.make_private(
-            model,
-            optimizer,
-            train_loader,
-            noise_multiplier=args.sigma,
-            max_grad_norm=max_grad_norm,
-        )
+        if args.clip_per_layer:
+            model, optimizer, train_loader = privacy_engine.make_private_per_layer(
+                model,
+                optimizer,
+                train_loader,
+                noise_multiplier=args.sigma,
+                max_grad_norms=max_grad_norm,
+            )
+        else:
+            model, optimizer, train_loader = privacy_engine.make_private(
+                model,
+                optimizer,
+                train_loader,
+                noise_multiplier=args.sigma,
+                max_grad_norm=max_grad_norm,
+            )
+
+
+    print(train_loader.batch_sampler)
 
     # Store some logs
     accuracy_per_epoch = []
@@ -578,12 +581,6 @@ def parse_args():
         help="Choose the backend for torch distributed from: gloo, nccl, mpi",
     )
 
-    parser.add_argument(
-        "--dist_algo",
-        type=str,
-        default="naive",
-        help="Choose the algorithm for distributed DPSGD: `naive` for a simple aggregation with allreduce, or `ddp_hook` to use DDP with Opacus",
-    )
     parser.add_argument(
         "--clip_per_layer",
         action="store_true",
