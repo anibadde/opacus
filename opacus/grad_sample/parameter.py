@@ -21,4 +21,4 @@ def compute_parameter_grad_sample(
         batch_dim: Batch dimension position
     """
     gs = torch.einsum("n...i,n...j->nij", B, A)
-    create_or_extend_grad_sample(layer.weight, gs, batch_dim)
+    create_or_extend_grad_sample(layer.data, gs, batch_dim)
