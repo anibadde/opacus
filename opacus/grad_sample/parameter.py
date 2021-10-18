@@ -7,7 +7,7 @@ import torch.nn as nn
 from .utils import create_or_extend_grad_sample, register_grad_sampler
 
 
-@register_grad_sampler(nn.Linear)
+@register_grad_sampler(nn.Parameter)
 def compute_linear_grad_sample(
     layer: nn.Parameter, A: torch.Tensor, B: torch.Tensor, batch_dim: int = 0
 ) -> None:
